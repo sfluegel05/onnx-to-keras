@@ -100,57 +100,88 @@ class TfKerasOperations(Operations):
         return tensor
 
     def op_conv(self, x, weights, bias=None, kernel_shape=None, strides=None, pads=None, dilations=None, group=None):
-        # Torch: (out_channels, in_channels, kH, kW)
         weights = ensure_data_format(weights, OnnxConstant)  # XXX Assumes no ops on weights
-        if len(kernel_shape) == 2:
-            x = ensure_data_format(x, InterleavedImageBatch)
-            assert kernel_shape == weights.shape[2:4]
-            if group > 1 and group == x.shape[3]:
-                # Tf; filter_height, filter_width, out_channels, in_channels
-                weights = weights.transpose(2, 3, 0, 1)
-                filters = weights.shape[2]
-                def ConvClass(filters, kernel_size, strides, dilation_rate, padding, groups,
-                              kernel_initializer, use_bias=True, bias_initializer='zeros'):
-                    return self.keras.layers.DepthwiseConv2D(kernel_size, strides, dilation_rate=dilation_rate,
-                                                             padding=padding, use_bias=use_bias,
-                                                             bias_initializer=bias_initializer,
-                                                             depthwise_initializer=kernel_initializer)
-            else:
-                # Tf; filter_height, filter_width, in_channels, out_channels
-                weights = weights.transpose(2, 3, 1, 0)
-                filters = weights.shape[3]
-                ConvClass = self.keras.layers.Conv2D
-            if pads == (0,0,0,0):
-                padding = 'valid'
-            elif (kernel_shape[0] == kernel_shape[1] and pads[0] == pads[1] == pads[2] == pads[3] and
-                  pads[0] * 2 + 1 == kernel_shape[0] and strides == (1, 1) and dilations == (1, 1)):
-                padding = 'same'
-            elif (kernel_shape == (3, 3) and pads == (1,1,1,1) and  strides == (2,2) and dilations == (1, 1) and
-                  x.shape[1] % 2 == 1 and x.shape[2] % 2 == 1):
-                padding = 'same'
-            else:
-                # ((top_pad, bottom_pad), (left_pad, right_pad))
-                pad = self.keras.layers.ZeroPadding2D(((pads[0], pads[2]), (pads[1], pads[3])))
-                x = pad(x)
-                padding = 'valid'
+        x = ensure_data_format(x, InterleavedImageBatch)
+        assert len(kernel_shape) == 2
+        assert kernel_shape == weights.shape[2:4]
 
-            if bias is None:
-                conv = ConvClass(filters, kernel_shape, strides,
-                                 dilation_rate=dilations, padding=padding, groups=group,
-                                 kernel_initializer='zeros', use_bias=False)
-                out = conv(x)
-                conv.set_weights([weights.view(np.ndarray)])
-            else:
-                bias = ensure_data_format(bias, OnnxConstant)  # XXX Assumes no ops on weights
-                conv = ConvClass(filters, kernel_shape, strides,
-                                 dilation_rate=dilations, padding=padding, groups=group,
-                                 kernel_initializer='zeros', bias_initializer='zeros')
-                out = conv(x)
-                conv.set_weights([weights.view(np.ndarray), bias.view(np.ndarray)])
-            out.data_format = InterleavedImageBatch
-            return [out]
+        conv_args = {
+            "strides": strides,
+            "dilation_rate": dilations,
+            "kernel_size": kernel_shape,
+        }
+
+        if group > 1 and group == x.shape[3]: # Dephwise conv
+            weights = weights.transpose(2, 3, 0, 1)
+            ConvClass = self.keras.layers.DepthwiseConv2D
+        elif group == 1: # Regular conv
+            weights = weights.transpose(2, 3, 1, 0)
+            conv_args['filters'] = weights.shape[3]
+            ConvClass = self.keras.layers.Conv2D
+            conv_args['groups'] = 1
+        else: # Grouped conv
+            # Grouped convolutions is supported in tf/keras but not yet supported in tflite
+            # https://github.com/tensorflow/tensorflow/issues/40044
+            class GroupedConv:
+                def __init__(self, **kwargs):
+                    self.groups, kwargs['groups'] = kwargs['groups'], 1
+                    self.use_bias = kwargs['use_bias']
+                    kwargs['filters'] //= self.groups
+                    self.filters = kwargs['filters']
+
+                    self.conv_layers = []
+                    for _ in range(self.groups):
+                        self.conv_layers.append(TfKerasOperations.keras.layers.Conv2D(**kwargs))
+
+                def __call__(self, x):
+                    splits = tf.split(x, self.groups, axis=-1)
+                    convolved_splits = []
+                    for split, layer in zip(splits, self.conv_layers):
+                        convolved_splits.append(layer(split))
+
+                    return tf.concat(convolved_splits, -1)
+
+                def set_weights(self, w):
+                    n = self.filters
+                    for i, layer in enumerate(self.conv_layers):
+                        grouped_w = w[0][:, :, :, i*n:(i+1)*n]
+                        if self.use_bias:
+                            grouped_b = w[1][i*n:(i+1)*n]
+                            layer.set_weights([grouped_w.view(np.ndarray), grouped_b.view(np.ndarray)])
+                        else:
+                            layer.set_weights([grouped_w.view(np.ndarray)])
+
+            weights = weights.transpose(2, 3, 1, 0)
+            conv_args['filters'] = weights.shape[3]
+            conv_args['groups'] = group
+            ConvClass = GroupedConv
+
+        conv_args['use_bias'] = not bias is None
+
+        if pads == (0,0,0,0):
+            conv_args['padding'] = 'valid'
+        elif (kernel_shape[0] == kernel_shape[1] and pads[0] == pads[1] == pads[2] == pads[3] and
+              pads[0] * 2 + 1 == kernel_shape[0] and strides == (1, 1) and dilations == (1, 1)):
+            conv_args['padding'] = 'same'
+        elif (kernel_shape == (3, 3) and pads == (1,1,1,1) and strides == (2,2) and dilations == (1, 1) and
+              x.shape[1] % 2 == 1 and x.shape[2] % 2 == 1):
+            conv_args['padding'] = 'same'
         else:
-            raise NotImplementedError
+            # ((top_pad, bottom_pad), (left_pad, right_pad))
+            pad = self.keras.layers.ZeroPadding2D(((pads[0], pads[2]), (pads[1], pads[3])))
+            x = pad(x)
+            conv_args['padding'] = 'valid'
+
+        conv = ConvClass(**conv_args)
+        out = conv(x)
+        out.data_format = InterleavedImageBatch
+
+        if conv_args['use_bias']:
+            conv.set_weights([weights.view(np.ndarray), bias.view(np.ndarray)])
+        else:
+            conv.set_weights([weights.view(np.ndarray)])
+
+        return [out]
 
     def op_relu(self, x):
         out = self.keras.layers.ReLU()(x)
