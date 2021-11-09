@@ -23,19 +23,19 @@ def make_onnx_model(net, indata, opset_version=None):
     return onnx.load(fd)
 
 
-def convert_and_compare_output(net, indata, precition=5, image_out=True, savable=True, missing_optimizations=False, opset_version=None):
+def convert_and_compare_output(net, indata, precition=5, image_out=True, savable=True, missing_optimizations=False, opset_version=None, **kwargs):
     try:
-        return _convert_and_compare_output(net, indata, precition, image_out, savable, missing_optimizations, opset_version)
+        return _convert_and_compare_output(net, indata, precition, image_out, savable, missing_optimizations, opset_version, **kwargs)
     except AssertionError:
-        return _convert_and_compare_output(net, indata, precition, image_out, savable, missing_optimizations, opset_version)
+        return _convert_and_compare_output(net, indata, precition, image_out, savable, missing_optimizations, opset_version, **kwargs)
 
-def _convert_and_compare_output(net, indata, precition=5, image_out=True, savable=True, missing_optimizations=False, opset_version=None):
+def _convert_and_compare_output(net, indata, precition=5, image_out=True, savable=True, missing_optimizations=False, opset_version=None, **kwargs):
     torch_indata = torch.tensor(indata)
     y1 = net(torch_indata).detach().numpy()
     onnx_model = make_onnx_model(net, torch.zeros_like(torch_indata), opset_version)
     with warnings.catch_warnings(record=True) as warns:
         warnings.simplefilter("always")
-        kernas_net = onnx2keras(onnx_model)
+        kernas_net = onnx2keras(onnx_model, **kwargs)
         warns = [w for w in warns if w.category is OptimizationMissingWarning]
         if not missing_optimizations:
             assert len(warns) == 0
@@ -219,6 +219,11 @@ class TestOnnx:
         net = torch.nn.Conv2d(8, 8, 7, groups=4)
         x = np.random.rand(1, 8, 224, 224).astype(np.float32)
         convert_and_compare_output(net, x)
+
+    def test_groupwise_tflite_compat(self):
+        net = torch.nn.Conv2d(8, 8, 7, groups=4)
+        x = np.random.rand(1, 8, 224, 224).astype(np.float32)
+        convert_and_compare_output(net, x, missing_optimizations=True, make_tflite_compatible=True)
 
     def test_groupwise_no_bias(self):
         net = torch.nn.Conv2d(6, 12, 4, groups=3, bias=False)

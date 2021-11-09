@@ -73,6 +73,7 @@ class Constant(np.ndarray):
 
 class TfKerasOperations(Operations):
     keras = tf.keras
+    make_tflite_compatible = False
 
     def parse_attr(self, a):
         if a.type == onnx.AttributeProto.INT:
@@ -114,14 +115,18 @@ class TfKerasOperations(Operations):
         if group > 1 and group == x.shape[3]: # Dephwise conv
             weights = weights.transpose(2, 3, 0, 1)
             ConvClass = self.keras.layers.DepthwiseConv2D
-        elif group == 1: # Regular conv
+        elif not self.make_tflite_compatible or group == 1: # Regular conv
             weights = weights.transpose(2, 3, 1, 0)
             conv_args['filters'] = weights.shape[3]
             ConvClass = self.keras.layers.Conv2D
-            conv_args['groups'] = 1
+            conv_args['groups'] = group
         else: # Grouped conv
             # Grouped convolutions is supported in tf/keras but not yet supported in tflite
             # https://github.com/tensorflow/tensorflow/issues/40044
+            warnings.warn(
+                "Grouped conv splitted into {} regular convs for tflite compatibility.",
+                OptimizationMissingWarning
+            )
             class GroupedConv:
                 def __init__(self, **kwargs):
                     self.groups, kwargs['groups'] = kwargs['groups'], 1
@@ -638,9 +643,10 @@ class TfKerasOperations(Operations):
 
 
 
-def onnx2keras(onnx_model):
+def onnx2keras(onnx_model, make_tflite_compatible=False):
     tensors = {}
     ops = TfKerasOperations()
+    ops.make_tflite_compatible = make_tflite_compatible
 
     for init in onnx_model.graph.initializer:
         tensors[init.name] = ops.make_constant(numpy_helper.to_array(init))
@@ -666,11 +672,11 @@ def onnx2keras(onnx_model):
     outputs = [tensors[o.name] for o in onnx_model.graph.output]
     return tf.keras.models.Model(model_inputs, outputs)
 
-def main(infile, outfile=None, export_saved_model=False):
+def main(infile, outfile=None, export_saved_model=False, make_tflite_compatible=False):
     if outfile is None:
         outfile = infile[:-5] if infile[-5:] == '.onnx' else infile
         outfile += '.h5'
-    model = onnx2keras(onnx.load(infile))
+    model = onnx2keras(onnx.load(infile), make_tflite_compatible)
     if export_saved_model:
         import tensorflow.compat.v1 as tf_v1
         tf_v1.keras.experimental.export_saved_model(model, export_saved_model)
