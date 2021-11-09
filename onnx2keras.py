@@ -126,7 +126,7 @@ class TfKerasOperations(Operations):
                   pads[0] * 2 + 1 == kernel_shape[0] and strides == (1, 1) and dilations == (1, 1)):
                 padding = 'same'
             elif (kernel_shape == (3, 3) and pads == (1,1,1,1) and  strides == (2,2) and dilations == (1, 1) and
-                  x.shape[1] % 2 == 1 and x.shape[2] % 2 == 1):
+                 not (x.shape[1] == None or x.shape[2] == None) and x.shape[1] % 2 == 1 and x.shape[2] % 2 == 1):
                 padding = 'same'
             else:
                 # ((top_pad, bottom_pad), (left_pad, right_pad))
