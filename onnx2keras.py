@@ -546,7 +546,7 @@ class TfKerasOperations(Operations):
         out = self.keras.backend.equal(x, y)
         out.data_format = x.data_format
         return [out]
-    
+
     def op_and(self, x, y):
         x, y = ensure_compatible_data_format(x, y)
         out = x & y
@@ -662,12 +662,18 @@ def verify(keras_model, onnx_model_file, decimals=2):
     keras_indata = []
     onnx_indata = {}
     for onnx_input, keras_input in zip(onnx_inputs, keras_inputs):
-        assert keras_input.shape[0] == onnx_input.shape[0] # Batch
-        assert keras_input.shape[3] == onnx_input.shape[1] # Channels
-        assert keras_input.shape[1] == onnx_input.shape[2] # Height
-        assert keras_input.shape[2] == onnx_input.shape[3] # Width
+        assert isinstance(onnx_input.shape[0], str) or keras_input.shape[0] == onnx_input.shape[0] # Batch
+        assert isinstance(onnx_input.shape[1], str) or keras_input.shape[3] == onnx_input.shape[1] # Channels
+        assert isinstance(onnx_input.shape[2], str) or keras_input.shape[1] == onnx_input.shape[2] # Height
+        assert isinstance(onnx_input.shape[3], str) or keras_input.shape[2] == onnx_input.shape[3] # Width
 
-        indata = np.random.rand(*keras_input.shape).astype(keras_input.dtype.as_numpy_dtype)
+        indata_shape = list(keras_input.shape)
+        indata_shape[0] = 1 if not indata_shape[0] else indata_shape[0]
+        indata_shape[1] = 224 if not indata_shape[1] else indata_shape[1]
+        indata_shape[2] = 224 if not indata_shape[2] else indata_shape[2]
+        indata_shape[3] = 3 if not indata_shape[3] else indata_shape[3]
+
+        indata = np.random.rand(*indata_shape).astype(keras_input.dtype.as_numpy_dtype)
         keras_indata.append(indata)
         onnx_indata[onnx_input.name] = indata.transpose(0, 3, 1, 2)
 
