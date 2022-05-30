@@ -92,11 +92,11 @@ class TfKerasOperations(Operations):
     def make_constant(self, x):
         return np.asarray(x).view(Constant)
 
-    def make_input(self, shape, dtype, name=None):
+    def make_input(self, shape, dtype):
         dtype = tf.as_dtype(dtype)
         # XXX: Assumes all inputs are image batches that we want to transpose
         assert len(shape) == 4
-        tensor = tf.keras.layers.Input((shape[2], shape[3], shape[1]), shape[0], name, dtype)
+        tensor = tf.keras.layers.Input((shape[2], shape[3], shape[1]), shape[0], None, dtype)
         tensor.data_format = InterleavedImageBatch
         return tensor
 
@@ -582,7 +582,7 @@ class TfKerasOperations(Operations):
         out = self.keras.backend.equal(x, y)
         out.data_format = x.data_format
         return [out]
-    
+
     def op_and(self, x, y):
         x, y = ensure_compatible_data_format(x, y)
         out = x & y
@@ -670,7 +670,7 @@ def onnx2keras(onnx_model, make_tflite_compatible=False):
         shape = [d.dim_value if (d.dim_value > 0 and d.dim_param == "") else None
                  for d in input.type.tensor_type.shape.dim]
         dtype = TENSOR_TYPE_TO_NP_TYPE[input.type.tensor_type.elem_type]
-        tensors[input.name] = ops.make_input(shape, dtype, input.name)
+        tensors[input.name] = ops.make_input(shape, dtype)
         model_inputs.append(tensors[input.name])
 
     for node in onnx_model.graph.node:
