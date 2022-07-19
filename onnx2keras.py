@@ -42,6 +42,18 @@ def ensure_data_format(tensor, format):
             warnings.warn("Transpose inserted. Please report at https://github.com/AxisCommunications/onnx-to-keras/issues", OptimizationMissingWarning)
         out.data_format = InterleavedImageBatch
         return out
+    elif tensor.data_format is InterleavedImageBatch and format is OnnxConstant:
+        assert len(tensor.shape) == 4
+        n, h, w, c = tensor.shape
+        if h == w == 1 or c == 1:
+            out = tf.reshape(tensor, [n, c, h, w])
+        else:
+            out = tf.transpose(tensor, [0, 3, 1, 2])
+            warnings.warn(
+                "Transpose inserted. Please report at https://github.com/AxisCommunications/onnx-to-keras/issues",
+                OptimizationMissingWarning)
+        out.data_format = OnnxConstant
+        return out
     elif tensor.data_format is InterleavedImageBatch and format is OnnxTensor:
         assert len(tensor.shape) == 4
         n, h, w, c = tensor.shape
@@ -205,6 +217,10 @@ class TfKerasOperations(Operations):
 
     def op_softmax(self, x, axis):
         out = self.keras.activations.softmax(x, axis=axis)
+        return [out]
+
+    def op_logsoftmax(self, x, axis):
+        out = tf.nn.log_softmax(x, axis=axis)
         out.data_format = x.data_format
         return [out]
 
