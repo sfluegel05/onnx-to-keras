@@ -95,9 +95,12 @@ class TfKerasOperations(Operations):
     def make_input(self, shape, dtype):
         dtype = tf.as_dtype(dtype)
         # XXX: Assumes all inputs are image batches that we want to transpose
-        assert len(shape) == 4
-        tensor = tf.keras.layers.Input((shape[2], shape[3], shape[1]), shape[0], None, dtype)
-        tensor.data_format = InterleavedImageBatch
+        if len(shape) == 4:
+            tensor = tf.keras.layers.Input((shape[2], shape[3], shape[1]), shape[0], None, dtype)
+            tensor.data_format = InterleavedImageBatch
+        else:
+            tensor = tf.keras.layers.Input(shape, dtype=dtype)
+            tensor.data_format = OnnxTensor
         return tensor
 
     def op_conv(self, x, weights, bias=None, kernel_shape=None, strides=None, pads=None, dilations=None, group=None):
